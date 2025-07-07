@@ -99,3 +99,5 @@ class AuthManager:
         # Usamos el número de teléfono como identificador de sesión
         client = TelegramClient(phone_number, api_id, api_hash)
         return client
+    async def get_token(self ,user_id):
+        return self.db.get_token(user_id)

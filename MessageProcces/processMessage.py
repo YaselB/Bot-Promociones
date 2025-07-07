@@ -16,13 +16,25 @@ class processMessage :
     @staticmethod
     def Split_Array_Dates(dates , size = 20):
         return [dates[i:i+size] for i in range(0 , len(dates) , size)]
-    async def GetMessagesToUpdate(self ,api_url):
+    async def GetMessagesToUpdate(self ,api_url ,headers):
         def Make_Request():
-            response = requests.get(api_url)
+            response = requests.get(api_url , headers=headers)
             try:
                 return response.status_code , response.json()
             except:
                 return response.status_code , {"Message" : f"Error a la hora de obtener los mensajes"}
+        status_code , response_data = await asyncio.to_thread(Make_Request)
+        return status_code , response_data
+    async def update_configs(self , api_url , configs , headers):
+        def Make_Request():
+            response = requests.patch(api_url , json = configs , headers=headers)
+            try:
+                return response.status_code , response.json()
+            except Exception as e:
+                print("⚠️ Error al parsear JSON de la respuesta:")
+                print(response.text)
+                print("Excepción capturada:", e)
+                return response.status_code , {"Message" : f"Error a la hora de actualizar los mensajes"}
         status_code , response_data = await asyncio.to_thread(Make_Request)
         return status_code , response_data
         

@@ -38,9 +38,10 @@ async def ReSend_Message(api_id , api_hash , id_user ,session_token , message):
         client.disconnect()
 async def cache_groups(client):
     dialogs = await client.get_dialogs()
-    for i in dialogs:
-        if i.is_group:
-            print(f"Grupo: {i.title} - ID: {i.id}")
-    groups = {dialog.id: dialog.entity for dialog in dialogs}
-    return groups
+    return {
+        dialog.id: dialog.entity
+        for dialog in dialogs
+        if dialog.is_group
+    }
+
 

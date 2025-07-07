@@ -17,7 +17,7 @@ import threading '''
 
 api_id = 29618407
 api_hash = '9139cd380cc27d66802056cd6aa70317'
-bot_token = '7890267305:AAEOU8SjxTJ0fv6lKnMIjW60SZhuuqoLrS8'
+bot_token = '7897944519:AAE67QPKjhWVJsrvd2PsJy3Iy7cTL5MqkO4'
 criptobot_Token = '34426:AAb9Y4eTl5TAZMvzmTD1SlnS9L3Okouv8Hg'
 api_criptobot_url = 'https://testnet-pay.crypt.bot/'
 
@@ -27,6 +27,8 @@ auth_manager = AuthManager(api_id, api_hash)
 
 temp_auth_data = {}
 user_config = {}
+groups_add = {}
+groups_remove = {}
 pending_configs: dict[int , list] = {}
 pending_edit: dict[int , dict] = {}
 plans = [
@@ -283,7 +285,15 @@ async def recibir_intervalo(event):
     }
     print(data["mensaje"])      
     try:
-        response = requests.post(f"http://localhost:3000/configuracio-mensaje", json=data)
+        token = await auth_manager.get_token(chat_id)
+        if not token:
+            await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+            return
+        headers = {
+            'Authorization' : f"Bearer {token}",
+            'Content-Type' : 'application/json'
+        }
+        response = requests.post(f"http://localhost:3000/configuracio-mensaje", json=data , headers=headers)
         if response.status_code == 200:
             del user_config[chat_id]
             await event.respond("✅ Configuración completada. Tu mensaje se reenviará automáticamente.")
@@ -358,10 +368,18 @@ async def monitor_payments():
         else:
             print(f"❌ Error al actualizar transacciones: {response[1]}")
         await asyncio.sleep(60) '''
-@bot.on(events.NewMessage(pattern='/updateConfigs'))
+@bot.on(events.NewMessage(pattern='/updateconfigs'))
 async def update_configs(event):
     chat_id = event.chat_id
-    status_code , configs = await processMessage().GetMessagesToUpdate(f"http://localhost:3000/configuracio-mensaje/GetconfigurationforUser/{chat_id}")
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content-Type' : 'application/json'
+    }
+    status_code , configs = await processMessage().GetMessagesToUpdate(f"http://localhost:3000/configuracio-mensaje/GetconfigurationforUser/{chat_id}" , headers)
     if status_code != 200:
         await event.respond("⚠️ No pude obtener las configuraciones (código {}).".format(status_code))
         return
@@ -380,17 +398,20 @@ async def update_configs(event):
         total = len(configs)
         nombres = []
         for gid in cfg["ids_destino"]:
-            ent = groups.get(int(gid))
-            if ent:
+            try:
+                ent = groups.get(int(gid))
+                if not ent:
+                    ent = await client.get_entity(int(gid))
                 nombres.append(ent.title)
-            else:
-                nombres.append(f"Grupo {gid} (No encontrado)")
+            except Exception:
+                nombres.append(f"{gid} (No encontrado)")
+
         destinos_str = "\n-".join(nombres)
         text = cfg["mensaje"].get("texto" , "")
         caption = (
             f"📋 Ìndice: {idx}/{total}\n"
             f"⏱ Intervalo: {cfg['interval']} minutos\n"
-            f"🎯 Destinos: {destinos_str}\n"
+            f"🎯 Destinos: \n{destinos_str}\n"
             f"📝 Mensaje: {text}"
         )
         media_path = cfg["mensaje"].get("media")
@@ -412,7 +433,8 @@ async def update_configs(event):
             row = []
     if row:
         buttons.append(row)
-    await event.respond("🔢 Selecciona el número de la configuración que quieres actualizar:" , buttons = buttons)
+    buttons.append([Button.inline("🎯 He terminado de actualizar" , data = f"update_finished")])
+    await event.respond("🔢 Selecciona el índice de la configuración que quieres actualizar:" , buttons = buttons)
 @bot.on(events.CallbackQuery(pattern = r'^select:(\d+)$'))
 async def on_select_config(event):
     await event.answer()
@@ -433,7 +455,7 @@ async def on_select_config(event):
     await client.disconnect()
     for gid in config["ids_destino"]:
         ent = grupos.get(int(gid))
-        nombres.append(ent.title if ent else f"Grupo {gid} (No encontrado)")
+        nombres.append(ent.title if ent else f"{gid} (No encontrado)")
     destinos_str = " \n- ".join(nombres)
     texto = config["mensaje"].get("texto" , "")
     caption = (
@@ -447,20 +469,35 @@ async def on_select_config(event):
     else:
         await bot.send_message(chat_id , caption)
     textos : list[str] = ["Intervalo" , "Destinos" , "Mensaje" , "Back"]
-    data : list[str] = [f"interval:{idx}" , f"destinos:{idx}" , f"message:{idx}" , f"go_back"]
+    data : list[str] = [f"interval:{idx}" , f"destinos:{idx}" , f"message:{idx}" , f"go_back:{idx}"]
     buttons = []
     row = []
     for texto , d in zip(textos , data):
         row.append(Button.inline(texto , data = d))
     buttons.append(row)
     await event.respond("Seleccione una opción" , buttons = buttons)
-@bot.on(events.CallbackQuery(pattern = r'^go_back$'))
+@bot.on(events.CallbackQuery(pattern = r'^go_back:(\d+)$'))
 async def back_to_configs(event):
     await event.answer()
     chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
     configs = pending_configs.get(chat_id)
     if not configs:
         return await event.answer("No hay configuraciones activas.", alert=True)
+    if chat_id in groups_add:
+        config = configs[idx]
+        old_groups = [int(g) for g in config["ids_destino"]]
+        new_groups = groups_add.pop(chat_id)["groups_to_add"]
+        merged = list(set(old_groups + [int(g) for g in new_groups]))
+        merged_string = [str(g) for g in merged]
+        config["ids_destino"] = merged_string
+    if chat_id in groups_remove:
+        config = configs[idx]
+        old_groups = [int(g) for g in config["ids_destino"]]
+        remove_groups = groups_remove.pop(chat_id)["groups_to_remove"]
+        merged = list(set(old_groups) - set(int(g) for g in remove_groups))
+        merged_string = [str(g) for g in merged]
+        config["ids_destino"] = merged_string
     try:
         await event.message.delete()
     except Exception:
@@ -474,6 +511,7 @@ async def back_to_configs(event):
             row = []
     if row:
         buttons.append(row)
+    buttons.append([Button.inline("🎯 He terminado de actualizar" , data = f"update_finished")])
     await bot.send_message(
         chat_id,
         "🔢 Selecciona el número de la configuración que quieres actualizar:",
@@ -497,10 +535,155 @@ async def on_interval_input(event):
     edit = pending_edit.pop(chat_id)
     idx = edit["idx"]
     pending_configs[chat_id][idx]["interval"] = nuevo_valor
-    print(pending_configs[chat_id][idx]["interval"])
-    button = Button.inline("Regresar a las configuraciones" , data = r'go_back')
+    button = Button.inline("Regresar a las configuraciones" , data = f"go_back:{idx}")
     await event.respond("Intervalo actualizado" , buttons = button)
+@bot.on(events.CallbackQuery(pattern = r'^message:(\d+)$'))
+async def message(event):
+    await event.answer()
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    pending_edit[chat_id] = {"field": "message" , "idx" : idx}
+    await event.respond("✏️ Envía la nueva descripción o mensaje")
+@bot.on(events.NewMessage(func = lambda e: e.chat_id in pending_edit and pending_edit[e.chat_id]["field"] == "message" and e.text))
+async def on_message_input(event):
+    chat_id = event.chat_id
+    new_Value = event.text.strip()
+    edit = pending_edit.pop(chat_id)
+    idx = edit["idx"]
+    pending_configs[chat_id][idx]["mensaje"]["texto"] = new_Value
+    button = Button.inline("Regresar a las configuraciones" , data = f"go_back:{idx}")
+    await event.respond("Descripción o mensaje actualizados " , buttons = button)
+@bot.on(events.CallbackQuery(pattern = r'^destinos:(\d+)$'))
+async def destinities(event):
+    await event.answer()
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    pending_edit[chat_id] = { "field" : "destinos" , "idx": idx}
+    textos : list[str] = ["✅ Agregar" , "❌ Eliminar"]
+    data : list[str] = [f"agregar:{idx}" , f"eliminar:{idx}"]
+    buttons = []
+    row = []
+    for t , d in zip(textos , data):
+        row.append(Button.inline(t , data = d))
+    buttons.append(row)
+    await bot.send_message(
+        chat_id,
+        "🔢 Selecciona la opción que deseas realizar ",
+        buttons = buttons
+    )
+@bot.on(events.CallbackQuery(pattern = r'^agregar:(\d+)$'))
+async def AddNewDestinities(event):
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    configs = pending_configs.get(chat_id)
+    config = configs[idx]
+    token = config["sessionToken"]
+    client = TelegramClient(StringSession(token) , api_id , api_hash)
+    await client.connect()
+    if not await client.is_user_authorized():
+        await event.answer("⚠️ Usuario no autorizado, no se pueden obtener los grupos." , alert = True)
+        return
+    groups = await MessageProcces.telegramService.cache_groups(client)
+    await client.disconnect()
+    for gid in config["ids_destino"]:
+        ent = groups.get(int(gid))
+        if ent :
+            groups.pop(int(gid) , None)
+    await event.respond("Por favor espere a que se muestren todos los grupos y presione el boton agregar en los grupos que desee agregar a la configuración.\n"
+                        "Despues que termine presione el botón 🔙 Back ")
+    if chat_id not in groups_add:
+        groups_add[chat_id] = { "groups_to_add" : [] }
+    for i in groups.values():
+        text = i.title
+        ent_id = next(k for k , v in groups.items() if v.id == i.id)
+        button = [Button.inline("✅ Agregar" , data=f"toggle_add:{ent_id}")]
+        await event.respond(text , buttons = button)
+    button = Button.inline("Regresar a las configuraciones" , data = f"go_back:{idx}")
+    await event.respond("🎯 He terminado de agregar los nuevos grupos" ,buttons = button)  
     
+@bot.on(events.CallbackQuery(pattern = r'^toggle_add:(\S+)'))
+async def update_add_groups(event):
+    chat_id = event.chat_id
+    group_id = event.data.decode().split(":" , 1)[1]
+    groups_to_add = groups_add[chat_id]
+    if group_id in groups_to_add["groups_to_add"]:
+        groups_to_add["groups_to_add"].remove(group_id)
+        newText = "✅ Agregar"
+    else:
+        groups_to_add["groups_to_add"].append(group_id)
+        newText = "❌ Eliminar"
+    try:
+        await event.edit(buttons = [[Button.inline(newText , data =f"toggle_add:{group_id}")]])
+    except Exception as e:
+        if "Content of the message was not modified" in str(e):
+            pass
+        else:
+            print("Error al editar el mensaje: ", e)
+    await event.answer("¡Actualizado!")
+     
+@bot.on(events.CallbackQuery(pattern = r'^eliminar:(\d+)'))
+async def DeleteNewDestinities(event):
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    configs = pending_configs.get(chat_id)
+    config = configs[idx]
+    token = config["sessionToken"]
+    client = TelegramClient(StringSession(token) , api_id , api_hash)
+    await client.connect()
+    if not await client.is_user_authorized():
+        await event.answer("⚠️ Usuario no autorizado, no se pueden obtener los grupos." , alert = True)
+        return
+    groups = await MessageProcces.telegramService.cache_groups(client)
+    await client.disconnect()
+    if chat_id not in groups_remove:
+        groups_remove[chat_id] = {"groups_to_remove" : [] }
+    for i in config["ids_destino"]:
+        if groups.get(int(i)):
+            ent = groups.get(int(i))
+            text = ent.title
+            button = Button.inline("❌ Eliminar" , data = f'toggle_remove:{i}')
+            await event.respond(text , buttons = button)
+    button = Button.inline("Regresar a las configuraciones" , data = f"go_back:{idx}")
+    await event.respond("🎯 He terminado de eliminar los grupos" ,buttons = button) 
+@bot.on(events.CallbackQuery(pattern = r'^toggle_remove:(\S+)'))
+async def update_remove_groups(event):
+    chat_id = event.chat_id
+    group_id = event.data.decode().split(":" ,1)[1]
+    groups_to_remove = groups_remove[chat_id]
+    if group_id not in groups_to_remove:
+        groups_to_remove["groups_to_remove"].append(group_id)
+        newText = "✅ Agregar"
+    else:
+        groups_to_remove["groups_to_remove"].remove(group_id)
+        newText = "❌ Eliminar"
+    try:
+        await event.edit(buttons = [[Button.inline(newText , data = f"toggle_remove:{group_id}")]])
+    except Exception as e:
+        if "Content of the message was not modified" in str(e):
+            pass
+        else:
+            print("Error al editar el mensaje: ", e)
+    await event.answer("¡Actualizado!")
+@bot.on(events.CallbackQuery(pattern = r'^update_finished$'))
+async def update_finished(event):
+    chat_id = event.chat_id
+    if chat_id in pending_configs:
+        configs = pending_configs.pop(chat_id)
+        token = await auth_manager.get_token(chat_id)
+        if not token:
+            await event.answer("El usuario no esta conectado , por favor conectese al bot y comience de nuevo" , alert = True)
+            return
+        headers = {
+            'Authorization' : f"Bearer {token}",
+            'Content-Type' : 'application/json'
+        }
+        api_url = f"http://localhost:3000/configuracio-mensaje/{chat_id}"
+        status_code , response_data = await processMessage().update_configs(api_url , configs , headers)
+        if status_code != 200:
+            await event.answer("⚠️ No pude actualizar las configuraciones (código {}).".format(status_code) , alert = True)
+            return
+        await event.respond("✅ Configuraciones actualizadas correctamente.")
+        
 # Iniciar el bot
 if __name__ == "__main__":
     print("Bot iniciado...")
