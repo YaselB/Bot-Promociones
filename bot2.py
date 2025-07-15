@@ -684,6 +684,147 @@ async def update_finished(event):
             return
         await event.respond("✅ Configuraciones actualizadas correctamente.")
         
+@bot.on(events.NewMessage(pattern = "/deleteconfig" ))
+async def deleteConfigs(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content-Type' : 'application/json'
+    }
+    status , configs = await processMessage().GetMessagesToUpdate(f"http://localhost:3000/configuracio-mensaje/GetconfigurationforUser/{chat_id}" , headers)
+    if status != 200:
+        await event.respond("⚠️ No pude obtener las configuraciones (código {}).".format(status))
+        return
+    if len(configs) == 0:
+        await event.respond("No tienes configuraciones activas.")
+        return
+    session_token = configs[0]["sessionToken"]
+    client = TelegramClient(StringSession(session_token) , api_id , api_hash)
+    await client.connect()
+    if not await client.is_user_authorized():
+        await event.respond("⚠️ Usuario no autorizado, no se pueden obtener los grupos.")
+        return
+    groups = await MessageProcces.telegramService.cache_groups(client)
+    await client.disconnect()
+    for idx , cfg in enumerate(configs , start=1):
+        total = len(configs)
+        nombres = []
+        for gid in cfg["ids_destino"]:
+            try:
+                ent = groups.get(int(gid))
+                if not ent:
+                    ent = await client.get_entity(int(gid))
+                nombres.append(ent.title)
+            except Exception:
+                nombres.append(f"{gid} (No encontrado)")
+        destinos_str = "\n-".join(nombres)
+        text = cfg["mensaje"].get("texto" , "")
+        caption = (
+            f"📋 Ìndice: {idx}/{total}\n"
+            f"⏱ Intervalo: {cfg['interval']} minutos\n"
+            f"🎯 Destinos: \n{destinos_str}\n"
+            f"📝 Mensaje: {text}"
+        )
+        media_path = cfg["mensaje"].get("media")
+        if media_path:
+            try:
+                await bot.send_file(chat_id , file = media_path , caption = caption)
+            except Exception as e:
+                await event.respond(caption + "\n\n❌ No pude adjuntar la imagen")
+                print(f"Error enviando media '{media_path}': {e}")
+        else:
+            await event.respond(caption)
+    pending_configs[chat_id] = configs
+    text : list[str] = ["🗑️ Eliminar una" , "🗑️ Eliminar todas"]
+    data : list[str] = ["deleteOne" , "deleteAll"]
+    buttons = []
+    row = []
+    for t , z in zip(text , data):
+        row.append(Button.inline( t , data = z))
+    buttons.append(row)
+    await bot.send_message(
+        chat_id,
+        "🔢 Selecciona la opción que deseas realizar ",
+        buttons = buttons
+    )
+@bot.on(events.CallbackQuery(pattern = r"^deleteOne$"))
+async def start_delete_one(event):
+    chat_id = event.chat_id
+    configs = pending_configs[chat_id]
+    buttons = []
+    row = []
+    for i , _ in enumerate(configs , start = 1):
+        row.append(Button.inline( str(i) , data = f"select_config_to_delete:{i-1}"))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    await event.respond("🔢 Selecciona el índice de la configuración que quieres eliminar" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^select_config_to_delete:(\d+)$'))
+async def select_config_to_delete(event):
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":",1)[1])
+    config = pending_configs[chat_id][idx]
+    id_config = config["idConfig"]
+    text: list[str] = ["🗑️ Eliminar" , "❌ No eliminar"]
+    data: list[str] = [f"yes:{id_config}" , f"no"]
+    buttons = []
+    for t , d in zip(text , data):
+        buttons.append(Button.inline(t , data = d))
+    await event.respond(f"Esta seguro de eliminar la configuracion {idx+1}" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes:(\d+)$'))
+async def delete_one(event):
+    chat_id = event.chat_id
+    id_config = int(event.data.decode().split(":",1)[1])
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content-Type' : 'application/json'
+    }
+    status , response = await processMessage().delete_one_config(f"http://localhost:3000/configuracio-mensaje/DeleteOneConfiguration/{id_config}" , headers)
+    if status == 200:
+        text = response.get("message" , "Configuración eliminada correctamente")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Configuración no encontrada ")
+        await event.respond(f"🔍🙈 {text}")
+@bot.on(events.CallbackQuery(pattern = r"^no$"))
+async def Not_delete(event):
+    await event.respond("Por favor envíe el comando para la acción que desee realizar")
+@bot.on(events.CallbackQuery(pattern = r"^deleteAll$"))
+async def Start_delete_all(event):
+    text : list[str] = ["🗑️ Eliminar" , "❌ No eliminar"]
+    data : list[str] = ["yes" ,"no"]
+    buttons = []
+    for t , d in zip(text , data):
+        buttons.append(Button.inline(t , data = d))
+    await event.respond("Esta seguro de eliminar todas sus configuraciones" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes$'))
+async def Delete_all(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content-Type' : 'application/json'
+    }
+    code , response = await processMessage().Delete_all_config(f"http://localhost:3000/configuracio-mensaje/DeleteAllConfigurations/{chat_id}" , headers = headers)
+    if code == 200:
+        text = response.get("message" , "Configuraciones eliminadas correctamente")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Error al eliminar las configuraciones")
+        await event.respond(f"❌ {text}")
 # Iniciar el bot
 if __name__ == "__main__":
     print("Bot iniciado...")

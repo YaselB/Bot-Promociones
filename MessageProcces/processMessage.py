@@ -37,4 +37,22 @@ class processMessage :
                 return response.status_code , {"Message" : f"Error a la hora de actualizar los mensajes"}
         status_code , response_data = await asyncio.to_thread(Make_Request)
         return status_code , response_data
+    async def delete_one_config(self , api_url , headers):
+        def Make_Request():
+            response = requests.delete(api_url , headers = headers)
+            try: 
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        status_code , response_data = await asyncio.to_thread(Make_Request)
+        return status_code , response_data
+    async def Delete_all_config(self , api_url , headers):
+        def Make_Request():
+            response = requests.delete(api_url , headers = headers )
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        status_code , response_data = await asyncio.to_thread(Make_Request)
+        return status_code , response_data
         
