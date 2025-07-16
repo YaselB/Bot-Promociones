@@ -39,20 +39,40 @@ plans = [
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
     welcome_message = """
-🤖 ¡Bienvenido al Bot de Promociones! 
+🤖 <b>¡Bienvenido al Bot de Promociones!</b>
 
-Estos son los comandos disponibles:
+Aquí tienes la lista de comandos disponibles:
 
-📱 /connect [número] - Conecta tu cuenta de Telegram
-   Ejemplo: /connect +1234567890
-   
-   
-❌ /logout - Desconecta tu cuenta del bot
+▶️ <b>/start</b>  
+Muestra este tutorial con la descripción de cada comando.
 
-Para comenzar, usa el comando /connect con tu número de teléfono. 
-¡Gracias por usar nuestro bot! 🚀
+📱 <b>/connect &lt;número&gt;</b>  
+Conecta tu cuenta de Telegram al bot.  
+<code>Ejemplo: /connect +1234567890</code>
+
+⚙️ <b>/message_settings</b>  
+Inicia la configuración del reenvío de mensajes personalizados.
+
+🔄 <b>/updateconfigs</b>  
+Actualiza tus configuraciones existentes sin tener que recrearlas.
+
+⏸️ <b>/pause</b>  
+Detiene temporalmente una o varias configuraciones activas.
+
+▶️ <b>/play</b>  
+Reanuda las configuraciones previamente pausadas.
+
+🗑️ <b>/deleteconfig</b>  
+Elimina una o varias configuraciones activas.
+
+❌ <b>/logout</b>  
+Desconecta tu cuenta del bot de forma segura.
+
+🚀 <b>Para comenzar</b>, usa <code>/connect</code> seguido de tu número de teléfono.
 """
     await event.respond(welcome_message, parse_mode='html')
+
+
 
 @bot.on(events.NewMessage(pattern='/connect'))
 async def start_connect(event):
@@ -777,10 +797,10 @@ async def select_config_to_delete(event):
     for t , d in zip(text , data):
         buttons.append(Button.inline(t , data = d))
     await event.respond(f"Esta seguro de eliminar la configuracion {idx+1}" , buttons = buttons)
-@bot.on(events.CallbackQuery(pattern = r'^yes:(\d+)$'))
+@bot.on(events.CallbackQuery(pattern = r'^yes:([a-f0-9-]+)$'))
 async def delete_one(event):
     chat_id = event.chat_id
-    id_config = int(event.data.decode().split(":",1)[1])
+    id_config = event.data.decode().split(":",1)[1]
     token = await auth_manager.get_token(chat_id)
     if not token:
         await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
@@ -825,6 +845,264 @@ async def Delete_all(event):
     else:
         text = response.get("message" , "Error al eliminar las configuraciones")
         await event.respond(f"❌ {text}")
+@bot.on(events.NewMessage(pattern = "/pause"))
+async def pause(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return 
+    headers = {
+        'Authorization' :f'Bearer {token}',
+        'Content_Type': 'application/json'
+    }
+    code , configs = await processMessage().GetConfigsEnable(f"http://localhost:3000/configuracio-mensaje/GetEnableConfigurations/{chat_id}" , headers = headers)
+    if code != 200:
+        await event.respond("⚠️ No pude obtener las configuraciones (código {}).".format(status))
+        return
+    if len(configs) == 0:
+        await event.respond("No tienes configuraciones activas.")
+        return 
+    session_token = configs[0]["sessionToken"]
+    client = TelegramClient(StringSession(session_token) , api_id , api_hash)
+    await client.connect()
+    groups = await MessageProcces.telegramService.cache_groups(client)
+    await client.disconnect()
+    for idx , cfg in enumerate(configs , start=1):
+        total = len(configs)
+        nombres = []
+        for gid in cfg["ids_destino"]:
+            try:
+                ent = groups.get(int(gid))
+                if not ent:
+                    ent = await client.get_entity(int(gid))
+                nombres.append(ent.title)
+            except Exception:
+                nombres.append(f"{gid} (No encontrado)")
+        destinos_str = "\n-".join(nombres)
+        text = cfg["mensaje"].get("texto" , "")
+        caption = (
+            f"📋 Ìndice: {idx}/{total}\n"
+            f"⏱ Intervalo: {cfg['interval']} minutos\n"
+            f"🎯 Destinos: \n{destinos_str}\n"
+            f"📝 Mensaje: {text}"
+        )
+        media_path = cfg["mensaje"].get("media")
+        if media_path:
+            try:
+                await bot.send_file(chat_id , file = media_path , caption = caption)
+            except Exception as e:
+                await event.respond(caption + "\n\n❌ No pude adjuntar la imagen")
+                print(f"Error enviando media '{media_path}': {e}")
+        else:
+            await event.respond(caption)
+    pending_configs[chat_id] = configs
+    text : list[str] = ["⏸️ Pausar una" , "⏸️ Pausar todas"]   
+    data : list[str] = ["pauseOne" , "pauseAll"]
+    buttons = []
+    for t , d in zip(text , data ):
+        buttons.append(Button.inline(t ,data = d))
+    await event.respond("🔢 Selecciona la opción que deseas realizar " , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r"^pauseOne$"))
+async def start_pause_one(event):
+    chat_id = event.chat_id
+    configs = pending_configs[chat_id]
+    buttons = []
+    row = []
+    for c , _ in enumerate(configs ,start = 1):
+        row.append(Button.inline(str(c) , data = f"select_config_to_pause:{c-1}"))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    await event.respond("🔢 Selecciona el índice de la configuración que deseas pausar" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^select_config_to_pause:(\d+)$'))
+async def select_config_to_pause(event):
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    config = pending_configs[chat_id][idx]
+    id_config = config["idConfig"]
+    text : list[str] = ["⏸️ Pausar" , "❌ No pausar"]
+    data : list[str] = [f"yes_pause:{id_config}", "no"]
+    buttons = []
+    for t , d in zip(text , data):
+        buttons.append(Button.inline( t , data = d))
+    await event.respond(f"¿Estás seguro de pausar la configuración {idx+1}?" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes_pause:([a-f0-9-]+)$'))
+async def end_pause(event):
+    chat_id = event.chat_id
+    id_config = event.data.decode().split(":" , 1)[1]
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content_Type' : 'application/json'
+    }
+    code , response = await processMessage().pause_one_config(f"http://localhost:3000/configuracio-mensaje/DisableOneConfiguration/{id_config}" , headers = headers)
+    if code == 200:
+        text = response.get("message" , "Configuración pausada correctamente")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Error al pausar la configuración")
+        await event.respond(f"❌ {text}")
+@bot.on(events.CallbackQuery(pattern = r'^pauseAll$'))
+async def Pause_all(event):
+    buttons = []
+    text : list[str] = ["⏸️ Pausar" , "❌ No pausar"]
+    data : list[str] = ["yes_pause_all" , "no"]
+    for t , d in zip(text , data ):
+        buttons.append(Button.inline( t , data= d))
+    await event.respond("¿Estás seguro de pausar todas las configuraciones?" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes_pause_all$'))
+async def end_pause_all(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado , por favor conectese al bot y comience de nuevo")
+        return 
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content_Type' : 'application/json'
+    }
+    code , response = await processMessage().pause_all_configs(f"http://localhost:3000/configuracio-mensaje/DisableAllConfigurations/{chat_id}" ,headers = headers)
+    if code == 200:
+        text = response.get("message" , "Configuraciones pausadas correctamente")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Error al pausar las configuraciones")
+        await event.respond(f"❌ {text}")
+@bot.on(events.NewMessage(pattern = "/play"))
+async def play_configs(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("El usuario no esta conectado ,por favor conectese al bot y comience de nuevo")
+        return 
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content_Type' : 'application/json'
+    }
+    code , configs = await processMessage().getConfigsDisabled(f"http://localhost:3000/configuracio-mensaje/GetDisableConfigurations/{chat_id}" , headers)
+    if code != 200:
+        await event.respond("⚠️ No pude obtener las configuraciones (código {}).".format(status))
+        return
+    if len(configs) == 0:
+        await event.respond("No tienes configuraciones pausadas")
+        return
+    session_token = configs[0]["sessionToken"]
+    client = TelegramClient(StringSession(session_token) , api_id , api_hash)
+    await client.connect()
+    groups = await MessageProcces.telegramService.cache_groups(client)
+    await client.disconnect()
+    for idx , cfg in enumerate(configs , start = 1):
+        total = len(configs)
+        nombres = []
+        for gid in cfg["ids_destino"]:
+            try:
+                ent = groups.get(int(gid))
+                nombres.append(ent.title)
+            except:
+                nombres.append(f"{gid} no encontrado")
+        destinos_str = "\n-".join(nombres)
+        text = cfg["mensaje"].get("texto" , "")
+        caption = (
+            f"📋 Ìndice: {idx}/{total}\n"
+            f"⏱ Intervalo: {cfg['interval']} minutos\n"
+            f"🎯 Destinos: \n{destinos_str}\n"
+            f"📝 Mensaje: {text}"
+        )
+        media_path = cfg["mensaje"].get("media")
+        if media_path:
+            try:
+                await bot.send_file(chat_id , file = media_path , caption = caption)
+            except Exception as e:
+                await event.respond(caption + "\n\n❌ No pude adjuntar la imagen")
+                print(f"Error enviando media '{media_path}': {e}")
+        else:
+            await event.respond(caption)
+    pending_configs[chat_id] = configs
+    buttons = []
+    text : list[str] = ["▶️ Reanudar una" , "▶️ Reanudar todas"]
+    data : list[str] = ["play_one" , "play_all"]
+    for t , d in zip(text , data ):
+        buttons.append(Button.inline( t , data = d))
+    await event.respond("🔢 Selecciona la opción que deseas realizar" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^play_one$'))
+async def play_one(event):
+    chat_id = event.chat_id
+    buttons = []
+    row = []
+    configs = pending_configs[chat_id]
+    for c , _ in enumerate(configs , start = 1):
+        row.append(Button.inline(str(c) , data = f"select_config_to_play:{c-1}"))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    await event.respond("🔢 Selecciona el índice de la configuración que deseas pausar" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^select_config_to_play:(\d+)$'))
+async def start_play_one(event):
+    chat_id = event.chat_id
+    idx = int(event.data.decode().split(":" , 1)[1])
+    config = pending_configs[chat_id][idx]
+    id_config = config["idConfig"]
+    buttons = []
+    text : list[str] = ["▶️ Reanudar" , "❌ No reanudar"]
+    data : list[str] = [f"yes_play:{id_config}" , "no"]
+    for t , d in zip(text , data ):
+        buttons.append(Button.inline( t , data = d))
+    await event.respond(f"¿Estás seguro de pausar la configuración {idx+1}?" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes_play:([a-f0-9-]+)$'))
+async def end_play_one(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    id_config = event.data.decode().split(":", 1)[1]
+    if not token:
+        await event.respond("No estás conectado ,por favor conectese al bot y comience de nuevo.")
+        return
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content_Type' : 'application/json'
+    }
+    code , response = await processMessage().play_one_config(f"http://localhost:3000/configuracio-mensaje/EnableOneConfiguration/{id_config}" , headers= headers)
+    if code == 200:
+        text = response.get("message" , "Configuración reanudada correctamente.")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Error al reanudar la configuración")
+        await event.respond(f"❌ {text}")
+@bot.on(events.CallbackQuery(pattern = r'^play_all$'))
+async def start_play_all(event):
+    buttons = []
+    text : list[str] = ["▶️ Reanudar" , "❌ No reanudar"]
+    data : list[str] = ["yes_play_all" , "no"]
+    for t , d in zip(text , data):
+        buttons.append(Button.inline(t , data = d))
+    await event.respond("¿Estás seguro de reanudar todas sus configuraciones?" , buttons = buttons)
+@bot.on(events.CallbackQuery(pattern = r'^yes_play_all$'))
+async def end_play_all(event):
+    chat_id = event.chat_id
+    token = await auth_manager.get_token(chat_id)
+    if not token:
+        await event.respond("No estás conectado , por favor conectese al bot y comience de nuevo")
+        return 
+    headers = {
+        'Authorization' : f"Bearer {token}",
+        'Content_Type' : 'application/json'
+    }
+    code , response = await processMessage().play_all_configs(f"http://localhost:3000/configuracio-mensaje/EnableAllConfigurations/{chat_id}" , headers = headers)
+    if code == 200:
+        text = response.get("message" , "Configuraciones reanudadas correctamente")
+        await event.respond(f"✅ {text}")
+    else:
+        text = response.get("message" , "Error al reanudar las configuraciones")
+        await event.respond(f"❌ {text}")
+    
+    
 # Iniciar el bot
 if __name__ == "__main__":
     print("Bot iniciado...")

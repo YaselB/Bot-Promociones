@@ -55,4 +55,57 @@ class processMessage :
                 return response.status_code , response.json()
         status_code , response_data = await asyncio.to_thread(Make_Request)
         return status_code , response_data
-        
+    async def GetConfigsEnable(self , api_url , headers):
+        def Make_Request():
+            response = requests.get(api_url , headers = headers)
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , {"Message" : f"Error a la hora de obtener los mensajes"}
+        code , data = await asyncio.to_thread(Make_Request)
+        return code , data
+    async def pause_one_config(self , api_url , headers):
+        def Make_Request():
+            response = requests.patch(api_url , headers = headers)
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        code , data = await asyncio.to_thread(Make_Request)
+        return code , data
+    async def pause_all_configs(self , api_url , headers):
+        def Make_Request():
+            response = requests.patch(api_url , headers = headers )
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        code , response = await asyncio.to_thread(Make_Request)
+        return code ,response
+    async def getConfigsDisabled(self , api_url , headers):
+        def Make_Request():
+            response = requests.get(api_url , headers = headers)
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        code , response = await asyncio.to_thread(Make_Request)
+        return code , response
+    async def play_one_config(self , api_url , headers):
+        def Make_Request():
+            response = requests.patch(api_url , headers = headers)
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json()
+        code , response = await asyncio.to_thread(Make_Request)
+        return code , response 
+    async def play_all_configs(self , api_url , headers):
+        def Make_Request():
+            response = requests.patch(api_url , headers = headers)
+            try:
+                return response.status_code , response.json()
+            except:
+                return response.status_code , response.json() 
+        code , response = await asyncio.to_thread(Make_Request)
+        return code , response      
